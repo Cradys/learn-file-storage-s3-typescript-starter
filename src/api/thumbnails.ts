@@ -1,9 +1,10 @@
 import { getBearerToken, validateJWT } from "../auth";
 import { respondWithJSON } from "./json";
-import { getVideo, getVideos, updateVideo } from "../db/videos";
+import { getVideo, updateVideo } from "../db/videos";
 import type { ApiConfig } from "../config";
 import type { BunRequest } from "bun";
 import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
+import path from 'node:path';
 
 
 export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
@@ -20,23 +21,8 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
 
   const MAX_UPLOAD_SIZE = 10 << 20 //10MB
   const formData = await req.formData()
-  const parsed = formData.get("thumbnail")
+  const file = formData.get("thumbnail")
 
-  if (!(parsed instanceof File)) {
-    throw new BadRequestError("Thumbnail file missing");
-  }
-
-  if (MAX_UPLOAD_SIZE < parsed.size) {
-    throw new BadRequestError("File is too big. Max 10MB");
-  }
-
-  const mediaType = parsed.type
-  const imageData = await parsed.arrayBuffer()
-  const buffer = Buffer.from(imageData)
-  const base64Encoded = buffer.toString("base64");
-
-  const dataURL = `data:${mediaType};base64,${base64Encoded}`
-  
   const video = getVideo(cfg.db, videoId)
 
   if (!video) {
@@ -45,6 +31,26 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   if (video.userID !== userID) {
     throw new UserForbiddenError("Not authorized to update this video");
   }
+
+  if (!(file instanceof File)) {
+    throw new BadRequestError("Thumbnail file missing");
+  }
+
+  if (MAX_UPLOAD_SIZE < file.size) {
+    throw new BadRequestError("File is too big. Max 10MB");
+  }
+
+  const mediaType = file.type
+  const fileType = mediaType.split("/")[1]
+  const filePath = path.join(cfg.assetsRoot, `${videoId}.${fileType}`)
+
+  
+
+  console.log(filePath)
+
+  await Bun.write(filePath, file)
+  
+  const dataURL = `http://localhost:${cfg.port}/assets/${videoId}.${fileType}`
 
   video.thumbnailURL = dataURL
 
