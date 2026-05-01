@@ -1,11 +1,12 @@
 import { respondWithJSON } from "./json";
 import { getBearerToken, validateJWT } from "../auth";
 import { getVideo, updateVideo } from "../db/videos";
+import type { Video } from "../db/videos";
 import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
 import { type ApiConfig } from "../config";
-import type { BunRequest } from "bun";
+import { S3Client, type BunRequest } from "bun";
 import { randomBytes } from "node:crypto";
-import path, { parse } from 'node:path';
+import path from 'node:path';
 
 export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const MAX_UPLOAD_SIZE = 1 << 30
@@ -59,19 +60,22 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const client = cfg.s3Client
 
   const s3File = client.file(s3FilePath)
-  const localFile = Bun.file(filePath)
+
+  const fastStartPath = await processVideoForFastStart(filePath)
+  await Bun.file(filePath).delete()
+  const localFile = Bun.file(fastStartPath)
 
   await s3File.write(localFile)
+  await localFile.delete()
 
-  const fileURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${s3FilePath}`
 
-  video.videoURL = fileURL
+  video.videoURL = `${cfg.s3CfDistribution}/${s3FilePath}`
+  await updateVideo(cfg.db, video)
 
-  updateVideo(cfg.db, video)
 
-  await Bun.file(filePath).delete()
 
-  return respondWithJSON(200, null);
+
+  return respondWithJSON(200, video);
 }
 
 
@@ -102,3 +106,14 @@ export async function getVideoAspectRatio(filePath: string): Promise<string> {
 }
 
 
+export async function processVideoForFastStart(filePath: string) {
+  const fastStartPath = filePath + ".processed.mp4"
+  const proc = Bun.spawn(["ffmpeg", "-i", filePath, "-movflags", "faststart", "-map_metadata", "0", "-codec", "copy", "-f", "mp4", fastStartPath])
+  const errorText = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+
+  if (exitCode !== 0) {
+    throw new Error(`FFmpeg error: ${errorText}`);
+  }
+  return fastStartPath
+}
